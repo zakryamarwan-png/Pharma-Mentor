@@ -1,0 +1,47 @@
+name: Pharma Mentor APK Build
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ main ]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Extract Pharma Mentor source
+        run: |
+          mkdir -p project
+          unzip -q PharmaMentor_source_bundle.zip -d project
+          cp -R project/. .
+          rm -rf project
+          chmod +x gradlew tools/*.sh || true
+
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install Android SDK packages
+        run: |
+          sdkmanager "platform-tools" \
+            "platforms;android-35" \
+            "build-tools;35.0.0"
+
+      - name: Build Debug APK
+        run: |
+          bash tools/build_apk.sh
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: pharma-mentor-debug-apk
+          path: app/build/outputs/apk/debug/app-debug.apk
