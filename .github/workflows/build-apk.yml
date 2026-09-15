@@ -3,7 +3,11 @@ name: Pharma Mentor APK Build
 on:
   workflow_dispatch:
   push:
-    branches: [ main ]
+    branches:
+      - main
+
+permissions:
+  contents: read
 
 jobs:
   build:
@@ -14,34 +18,64 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Extract Pharma Mentor source
+        shell: bash
         run: |
+          set -e
           mkdir -p project
           unzip -q PharmaMentor_source_bundle.zip -d project
           cp -R project/. .
           rm -rf project
-          chmod +x gradlew tools/*.sh || true
+          chmod +x gradlew
+          chmod +x tools/*.sh || true
 
-      - name: Setup Java
+      - name: Setup Java 17
         uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: '17'
 
       - name: Setup Android SDK
-        uses: android-actions/setup-android@v3
+        uses: android-actions/setup-android@v4
+        with:
+          accept-android-sdk-licenses: true
 
       - name: Install Android SDK packages
+        shell: bash
         run: |
-          sdkmanager "platform-tools" \
+          set -e
+          yes | sdkmanager --licenses >/dev/null || true
+
+          sdkmanager --install \
+            "platform-tools" \
             "platforms;android-35" \
             "build-tools;35.0.0"
 
-      - name: Build Debug APK
+      - name: Verify Android SDK
+        shell: bash
         run: |
-          bash tools/build_apk.sh
+          echo "ANDROID_HOME=$ANDROID_HOME"
+          echo "ANDROID_SDK_ROOT=$ANDROID_SDK_ROOT"
+          sdkmanager --version
+          java -version
 
-      - name: Upload APK
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Build Debug APK
+        shell: bash
+        run: |
+          set -e
+          ./gradlew --no-daemon --stacktrace :app:assembleDebug
+
+      - name: Verify APK
+        shell: bash
+        run: |
+          ls -lh app/build/outputs/apk/debug/
+          test -f app/build/outputs/apk/debug/app-debug.apk
+
+      - name: Upload Debug APK
         uses: actions/upload-artifact@v4
         with:
           name: pharma-mentor-debug-apk
           path: app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
