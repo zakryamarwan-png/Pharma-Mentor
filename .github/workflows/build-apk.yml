@@ -37,20 +37,10 @@ jobs:
       - name: Setup Android SDK
         uses: android-actions/setup-android@v4
         with:
-          packages: ''
-
-      - name: Accept Android SDK licenses
-        shell: bash
-        run: |
-          yes | sdkmanager --licenses >/dev/null || true
-
-      - name: Install Android SDK packages
-        shell: bash
-        run: |
-          sdkmanager --install \
-            "platform-tools" \
-            "platforms;android-35" \
-            "build-tools;35.0.0"
+          packages: |
+            platform-tools
+            platforms;android-35
+            build-tools;35.0.0
 
       - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v4
