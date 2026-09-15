@@ -21,10 +21,12 @@ jobs:
         shell: bash
         run: |
           set -e
+
           mkdir -p project
           unzip -q PharmaMentor_V51_CLEAN_FIXED.zip -d project
           cp -R project/. .
           rm -rf project
+
           chmod +x gradlew
           chmod +x tools/*.sh || true
 
@@ -36,20 +38,16 @@ jobs:
 
       - name: Setup Android SDK
         uses: android-actions/setup-android@v4
-
-      - name: Install Android SDK packages
-        shell: bash
-        run: |
-          set -e
-          sdkmanager --install \
-            "platform-tools" \
-            "platforms;android-35" \
-            "build-tools;35.0.0"
+        with:
+          packages: |
+            platform-tools
+            platforms;android-35
+            build-tools;35.0.0
 
       - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v4
 
-      - name: Create JVM compatibility fix
+      - name: Fix JVM target compatibility
         shell: bash
         run: |
           set -e
@@ -65,10 +63,22 @@ jobs:
             '}' \
             > jvm-fix.gradle
 
+      - name: Verify Android SDK
+        shell: bash
+        run: |
+          set -e
+
+          echo "Android SDK:"
+          echo "$ANDROID_HOME"
+
+          echo "SDK Manager:"
+          sdkmanager --version
+
       - name: Build Debug APK
         shell: bash
         run: |
           set -e
+
           ./gradlew \
             -I jvm-fix.gradle \
             --no-daemon \
@@ -79,8 +89,11 @@ jobs:
         shell: bash
         run: |
           set -e
+
           ls -lh app/build/outputs/apk/debug/
+
           test -f app/build/outputs/apk/debug/app-debug.apk
+
           echo "APK created successfully."
 
       - name: Upload Debug APK
