@@ -35,10 +35,8 @@ jobs:
 
       - name: Setup Android SDK
         uses: android-actions/setup-android@v3
-        with:
-          packages: ''
 
-      - name: Install Android SDK components
+      - name: Install Android SDK
         shell: bash
         run: |
           set -e
@@ -55,34 +53,31 @@ jobs:
         run: |
           set -e
 
-          echo "ANDROID_HOME=$ANDROID_HOME"
-          echo "ANDROID_SDK_ROOT=$ANDROID_SDK_ROOT"
-
           test -d "$ANDROID_HOME/platforms/android-35"
           test -d "$ANDROID_HOME/build-tools/35.0.0"
 
           echo "Android SDK 35 is ready."
 
-      - name: Check source archive
+      - name: Select Pharma Mentor source
         shell: bash
         run: |
           set -e
 
-          ZIP="./PharmaMentor_V51_FULL_FIXED_READY_COMPILE_FIXED.zip"
+          ZIP="./PharmaMentor_V51_FULL_FIXED_READY.zip"
 
           if [ ! -f "$ZIP" ]; then
-            echo "ERROR: Corrected source archive was not found:"
+            echo "ERROR: Source ZIP not found:"
             echo "$ZIP"
-            echo ""
-            echo "ZIP files currently in repository:"
-            find . -maxdepth 1 -type f -name '*.zip' -print
+            echo
+            echo "Available ZIP files:"
+            find . -maxdepth 1 -type f -name "*.zip" -print
             exit 1
           fi
 
-          echo "Using corrected source archive:"
+          echo "Using:"
           echo "$ZIP"
 
-      - name: Extract Pharma Mentor source
+      - name: Extract source
         shell: bash
         run: |
           set -e
@@ -90,26 +85,26 @@ jobs:
           rm -rf extracted project
           mkdir -p extracted project
 
-          ZIP="./PharmaMentor_V51_FULL_FIXED_READY_COMPILE_FIXED.zip"
+          unzip -q \
+            "./PharmaMentor_V51_FULL_FIXED_READY.zip" \
+            -d extracted
 
-          unzip -q "$ZIP" -d extracted
+          ROOT="$(dirname "$(find extracted \
+            -type f \
+            -name 'settings.gradle.kts' \
+            | head -n 1)")"
 
-          ROOT="$(dirname "$(find extracted -type f -name 'settings.gradle.kts' | head -n 1)")"
-
-          if [ -z "$ROOT" ] || [ ! -f "$ROOT/settings.gradle.kts" ]; then
-            echo "ERROR: Gradle project root was not found."
-
-            echo "Extracted files:"
-            find extracted -maxdepth 5 -type f | head -150
-
+          if [ -z "$ROOT" ]; then
+            echo "ERROR: Gradle project root not found."
             exit 1
           fi
 
-          echo "Gradle project root: $ROOT"
+          echo "Project root:"
+          echo "$ROOT"
 
           cp -R "$ROOT"/. project/
 
-      - name: Verify Gradle project
+      - name: Verify project
         shell: bash
         run: |
           set -e
@@ -121,15 +116,68 @@ jobs:
           test -f app/build.gradle.kts
           test -f app/src/main/AndroidManifest.xml
           test -f app/src/main/java/com/pharmamentor/app/MainActivity.kt
-          test -f app/src/main/java/com/pharmamentor/app/data/AdaptiveSessionEngine.kt
 
-          echo "Gradle project verification passed."
+          echo "Project verification passed."
 
-          echo "MainActivity lines:"
+          echo
+          echo "MainActivity:"
           wc -l app/src/main/java/com/pharmamentor/app/MainActivity.kt
 
-          echo "AdaptiveSessionEngine:"
-          wc -l app/src/main/java/com/pharmamentor/app/data/AdaptiveSessionEngine.kt
+          echo
+          echo "Kotlin files:"
+          find app/src/main/java -type f -name "*.kt" | sort
+
+      - name: Verify critical source files
+        shell: bash
+        run: |
+          set -e
+
+          cd project
+
+          test -f \
+            app/src/main/java/com/pharmamentor/app/MainActivity.kt
+
+          test -f \
+            app/src/main/java/com/pharmamentor/app/data/AdaptiveSessionEngine.kt
+
+          echo "Critical source files exist."
+
+      - name: Kotlin source diagnostics
+        shell: bash
+        run: |
+          set -e
+
+          cd project
+
+          echo "======================================"
+          echo "KOTLIN SOURCE DIAGNOSTICS"
+          echo "======================================"
+
+          echo
+          echo "MainActivity.kt:"
+          grep -n \
+            "suspend\|lifecycleScope\|LayoutParams\|tutorAttempts" \
+            app/src/main/java/com/pharmamentor/app/MainActivity.kt \
+            || true
+
+          echo
+          echo "AdaptiveSessionEngine.kt:"
+          sed -n '1,100p' \
+            app/src/main/java/com/pharmamentor/app/data/AdaptiveSessionEngine.kt
+
+          echo
+          echo "======================================"
+          echo "END DIAGNOSTICS"
+          echo "======================================"
+
+      - name: Clean previous build
+        shell: bash
+        run: |
+          set -e
+
+          cd project
+
+          gradle --no-daemon clean
 
       - name: Build Debug APK
         shell: bash
@@ -138,7 +186,11 @@ jobs:
 
           cd project
 
-          gradle --no-daemon --stacktrace :app:assembleDebug
+          gradle \
+            --no-daemon \
+            --stacktrace \
+            --warning-mode all \
+            :app:assembleDebug
 
       - name: Verify APK
         shell: bash
@@ -152,10 +204,14 @@ jobs:
             exit 1
           fi
 
-          echo "APK created successfully:"
+          echo
+          echo "======================================"
+          echo "APK CREATED SUCCESSFULLY"
+          echo "======================================"
+
           ls -lh "$APK"
 
-      - name: Upload Debug APK
+      - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
           name: pharma-mentor-v51-debug-apk
