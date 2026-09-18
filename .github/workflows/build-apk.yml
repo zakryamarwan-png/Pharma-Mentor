@@ -20,7 +20,7 @@ jobs:
 
     steps:
 
-      # 1. Download repository
+      # 1. Checkout
       - name: Checkout repository
         uses: actions/checkout@v4
 
@@ -43,20 +43,20 @@ jobs:
         with:
           packages: ''
 
-      # 5. Install required Android SDK packages
+      # 5. Install Android SDK
       - name: Install Android SDK components
         shell: bash
         run: |
           set -e
 
-          echo "Android SDK:"
           echo "ANDROID_HOME=$ANDROID_HOME"
           echo "ANDROID_SDK_ROOT=$ANDROID_SDK_ROOT"
 
           echo "Accepting Android SDK licenses..."
           yes | sdkmanager --licenses >/dev/null || true
 
-          echo "Installing Android SDK 35..."
+          echo "Installing required SDK packages..."
+
           sdkmanager --install \
             "platform-tools" \
             "platforms;android-35" \
@@ -64,13 +64,11 @@ jobs:
 
           echo "Android SDK installation completed."
 
-      # 6. Verify Android SDK
+      # 6. Verify SDK
       - name: Verify Android SDK
         shell: bash
         run: |
           set -e
-
-          echo "Checking Android SDK..."
 
           test -d "$ANDROID_HOME/platforms/android-35"
           test -d "$ANDROID_HOME/build-tools/35.0.0"
@@ -78,51 +76,49 @@ jobs:
           echo "Android SDK 35: OK"
           echo "Build Tools 35.0.0: OK"
 
-          sdkmanager --list_installed | grep -E \
-            "platform-tools|platforms;android-35|build-tools;35.0.0" || true
-
-      # 7. Find source ZIP
-      - name: Find Pharma Mentor source
+      # 7. Locate source ZIP
+      - name: Locate Pharma Mentor source
         shell: bash
         run: |
           set -e
 
-          echo "Files in repository root:"
+          echo "Repository files:"
           ls -lah
 
-          ZIP=""
+          ZIP="PharmaMentor_V51_FULL_FIXED_READY.zip"
 
-          if [ -f "PharmaMentor_V51_FULL_FIXED_READY.zip" ]; then
-            ZIP="PharmaMentor_V51_FULL_FIXED_READY.zip"
-          else
-            ZIP="$(find . -maxdepth 1 -type f -name '*.zip' | head -n 1)"
-          fi
-
-          if [ -z "$ZIP" ]; then
-            echo "ERROR: No Pharma Mentor ZIP file found."
+          if [ ! -f "$ZIP" ]; then
+            echo "ERROR: $ZIP was not found."
+            echo "Available ZIP files:"
+            find . -maxdepth 1 -type f -name "*.zip" -print
             exit 1
           fi
 
-          echo "SOURCE_ZIP=$ZIP" >> "$GITHUB_ENV"
-          echo "Using source ZIP: $ZIP"
+          echo "Using source archive: $ZIP"
 
-      # 8. Extract project
+          echo "SOURCE_ZIP=$ZIP" >> "$GITHUB_ENV"
+
+      # 8. Extract source
       - name: Extract Pharma Mentor source
         shell: bash
         run: |
           set -e
 
           rm -rf extracted project
-          mkdir -p extracted project
 
-          echo "Extracting:"
-          echo "$SOURCE_ZIP"
+          mkdir -p extracted
+          mkdir -p project
+
+          echo "Extracting $SOURCE_ZIP ..."
 
           unzip -q "$SOURCE_ZIP" -d extracted
 
           echo "Searching for Gradle project..."
 
-          ROOT="$(dirname "$(find extracted -type f -name 'settings.gradle.kts' | head -n 1)")"
+          ROOT="$(dirname "$(find extracted \
+            -type f \
+            -name 'settings.gradle.kts' \
+            | head -n 1)")"
 
           if [ -z "$ROOT" ] || [ ! -f "$ROOT/settings.gradle.kts" ]; then
             echo "ERROR: Gradle project root was not found."
@@ -146,59 +142,60 @@ jobs:
 
           cd project
 
-          echo "Project files:"
-          ls -lah
-
           test -f settings.gradle.kts
           test -f build.gradle.kts
           test -f app/build.gradle.kts
           test -f app/src/main/AndroidManifest.xml
           test -f app/src/main/java/com/pharmamentor/app/MainActivity.kt
 
-          echo ""
-          echo "Gradle project verification PASSED."
+          echo "======================================"
+          echo "Gradle project verification PASSED"
+          echo "======================================"
 
-          echo ""
           echo "MainActivity:"
           wc -l app/src/main/java/com/pharmamentor/app/MainActivity.kt
 
-      # 10. Check Java and Gradle
+      # 10. Verify Java and Gradle
       - name: Verify Java and Gradle
         shell: bash
         run: |
           set -e
 
-          echo "Java:"
+          echo "Java version:"
           java -version
 
           echo ""
-          echo "Gradle:"
+          echo "Gradle version:"
           gradle --version
 
-      # 11. Clean project
-      - name: Clean Gradle project
+      # 11. Clean
+      - name: Clean project
         shell: bash
         run: |
           set -e
 
           cd project
 
-          gradle --no-daemon clean
+          gradle \
+            --no-daemon \
+            clean
 
-      # 12. Build Debug APK
-      - name: Build Debug APK
+      # 12. Build APK + Build Scan
+      - name: Build Debug APK with Build Scan
         shell: bash
         run: |
           set -e
 
           cd project
 
-          echo "Starting Pharma Mentor Debug APK build..."
+          echo "======================================"
+          echo "BUILDING PHARMA MENTOR APK"
+          echo "======================================"
 
           gradle \
             --no-daemon \
             --stacktrace \
-            --info \
+            --scan \
             :app:assembleDebug
 
       # 13. Verify APK
@@ -212,7 +209,7 @@ jobs:
           if [ ! -f "$APK" ]; then
             echo "ERROR: APK was not created."
 
-            echo "Searching build directory:"
+            echo "Searching build outputs..."
             find project/app/build -type f 2>/dev/null | head -200 || true
 
             exit 1
@@ -232,8 +229,9 @@ jobs:
           name: pharma-mentor-v51-debug-apk
           path: project/app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
+          retention-days: 30
 
-      # 15. Upload build reports if build fails
+      # 15. Upload reports if build fails
       - name: Upload build reports
         if: failure()
         uses: actions/upload-artifact@v4
