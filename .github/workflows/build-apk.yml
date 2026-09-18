@@ -32,6 +32,16 @@ jobs:
         with:
           gradle-version: '8.10'
 
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install Android SDK components
+        shell: bash
+        run: |
+          set -e
+          yes | sdkmanager --licenses >/dev/null
+          sdkmanager --install "platform-tools" "platforms;android-35" "build-tools;35.0.0"
+
       - name: Verify Android SDK
         shell: bash
         run: |
@@ -90,7 +100,6 @@ jobs:
           test -f app/src/main/java/com/pharmamentor/app/MainActivity.kt
 
           echo "Gradle project verification passed."
-
           echo "MainActivity lines:"
           wc -l app/src/main/java/com/pharmamentor/app/MainActivity.kt
 
@@ -100,7 +109,6 @@ jobs:
           set -e
 
           cd project
-
           gradle --no-daemon --stacktrace :app:assembleDebug
 
       - name: Verify APK
