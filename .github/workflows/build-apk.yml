@@ -15,69 +15,99 @@ env:
 
 jobs:
   build:
+    name: Build Pharma Mentor APK
     runs-on: ubuntu-latest
 
     steps:
 
+      # 1. Download repository
       - name: Checkout repository
         uses: actions/checkout@v4
 
+      # 2. Java 17
       - name: Setup Java 17
         uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: '17'
 
+      # 3. Gradle
       - name: Setup Gradle 8.10
         uses: gradle/actions/setup-gradle@v6
         with:
           gradle-version: '8.10'
 
+      # 4. Android SDK
       - name: Setup Android SDK
-        uses: android-actions/setup-android@v3
+        uses: android-actions/setup-android@v4
+        with:
+          packages: ''
 
-      - name: Install Android SDK
+      # 5. Install required Android SDK packages
+      - name: Install Android SDK components
         shell: bash
         run: |
           set -e
 
-          yes | sdkmanager --licenses >/dev/null 2>&1 || true
+          echo "Android SDK:"
+          echo "ANDROID_HOME=$ANDROID_HOME"
+          echo "ANDROID_SDK_ROOT=$ANDROID_SDK_ROOT"
 
+          echo "Accepting Android SDK licenses..."
+          yes | sdkmanager --licenses >/dev/null || true
+
+          echo "Installing Android SDK 35..."
           sdkmanager --install \
             "platform-tools" \
             "platforms;android-35" \
             "build-tools;35.0.0"
 
+          echo "Android SDK installation completed."
+
+      # 6. Verify Android SDK
       - name: Verify Android SDK
         shell: bash
         run: |
           set -e
 
+          echo "Checking Android SDK..."
+
           test -d "$ANDROID_HOME/platforms/android-35"
           test -d "$ANDROID_HOME/build-tools/35.0.0"
 
-          echo "Android SDK 35 is ready."
+          echo "Android SDK 35: OK"
+          echo "Build Tools 35.0.0: OK"
 
-      - name: Select Pharma Mentor source
+          sdkmanager --list_installed | grep -E \
+            "platform-tools|platforms;android-35|build-tools;35.0.0" || true
+
+      # 7. Find source ZIP
+      - name: Find Pharma Mentor source
         shell: bash
         run: |
           set -e
 
-          ZIP="./PharmaMentor_V51_FULL_FIXED_READY.zip"
+          echo "Files in repository root:"
+          ls -lah
 
-          if [ ! -f "$ZIP" ]; then
-            echo "ERROR: Source ZIP not found:"
-            echo "$ZIP"
-            echo
-            echo "Available ZIP files:"
-            find . -maxdepth 1 -type f -name "*.zip" -print
+          ZIP=""
+
+          if [ -f "PharmaMentor_V51_FULL_FIXED_READY.zip" ]; then
+            ZIP="PharmaMentor_V51_FULL_FIXED_READY.zip"
+          else
+            ZIP="$(find . -maxdepth 1 -type f -name '*.zip' | head -n 1)"
+          fi
+
+          if [ -z "$ZIP" ]; then
+            echo "ERROR: No Pharma Mentor ZIP file found."
             exit 1
           fi
 
-          echo "Using:"
-          echo "$ZIP"
+          echo "SOURCE_ZIP=$ZIP" >> "$GITHUB_ENV"
+          echo "Using source ZIP: $ZIP"
 
-      - name: Extract source
+      # 8. Extract project
+      - name: Extract Pharma Mentor source
         shell: bash
         run: |
           set -e
@@ -85,31 +115,39 @@ jobs:
           rm -rf extracted project
           mkdir -p extracted project
 
-          unzip -q \
-            "./PharmaMentor_V51_FULL_FIXED_READY.zip" \
-            -d extracted
+          echo "Extracting:"
+          echo "$SOURCE_ZIP"
 
-          ROOT="$(dirname "$(find extracted \
-            -type f \
-            -name 'settings.gradle.kts' \
-            | head -n 1)")"
+          unzip -q "$SOURCE_ZIP" -d extracted
 
-          if [ -z "$ROOT" ]; then
-            echo "ERROR: Gradle project root not found."
+          echo "Searching for Gradle project..."
+
+          ROOT="$(dirname "$(find extracted -type f -name 'settings.gradle.kts' | head -n 1)")"
+
+          if [ -z "$ROOT" ] || [ ! -f "$ROOT/settings.gradle.kts" ]; then
+            echo "ERROR: Gradle project root was not found."
+
+            echo "Extracted files:"
+            find extracted -maxdepth 5 -type f | head -200
+
             exit 1
           fi
 
-          echo "Project root:"
+          echo "Gradle project root:"
           echo "$ROOT"
 
           cp -R "$ROOT"/. project/
 
-      - name: Verify project
+      # 9. Verify project
+      - name: Verify Gradle project
         shell: bash
         run: |
           set -e
 
           cd project
+
+          echo "Project files:"
+          ls -lah
 
           test -f settings.gradle.kts
           test -f build.gradle.kts
@@ -117,60 +155,28 @@ jobs:
           test -f app/src/main/AndroidManifest.xml
           test -f app/src/main/java/com/pharmamentor/app/MainActivity.kt
 
-          echo "Project verification passed."
+          echo ""
+          echo "Gradle project verification PASSED."
 
-          echo
+          echo ""
           echo "MainActivity:"
           wc -l app/src/main/java/com/pharmamentor/app/MainActivity.kt
 
-          echo
-          echo "Kotlin files:"
-          find app/src/main/java -type f -name "*.kt" | sort
-
-      - name: Verify critical source files
+      # 10. Check Java and Gradle
+      - name: Verify Java and Gradle
         shell: bash
         run: |
           set -e
 
-          cd project
+          echo "Java:"
+          java -version
 
-          test -f \
-            app/src/main/java/com/pharmamentor/app/MainActivity.kt
+          echo ""
+          echo "Gradle:"
+          gradle --version
 
-          test -f \
-            app/src/main/java/com/pharmamentor/app/data/AdaptiveSessionEngine.kt
-
-          echo "Critical source files exist."
-
-      - name: Kotlin source diagnostics
-        shell: bash
-        run: |
-          set -e
-
-          cd project
-
-          echo "======================================"
-          echo "KOTLIN SOURCE DIAGNOSTICS"
-          echo "======================================"
-
-          echo
-          echo "MainActivity.kt:"
-          grep -n \
-            "suspend\|lifecycleScope\|LayoutParams\|tutorAttempts" \
-            app/src/main/java/com/pharmamentor/app/MainActivity.kt \
-            || true
-
-          echo
-          echo "AdaptiveSessionEngine.kt:"
-          sed -n '1,100p' \
-            app/src/main/java/com/pharmamentor/app/data/AdaptiveSessionEngine.kt
-
-          echo
-          echo "======================================"
-          echo "END DIAGNOSTICS"
-          echo "======================================"
-
-      - name: Clean previous build
+      # 11. Clean project
+      - name: Clean Gradle project
         shell: bash
         run: |
           set -e
@@ -179,6 +185,7 @@ jobs:
 
           gradle --no-daemon clean
 
+      # 12. Build Debug APK
       - name: Build Debug APK
         shell: bash
         run: |
@@ -186,12 +193,15 @@ jobs:
 
           cd project
 
+          echo "Starting Pharma Mentor Debug APK build..."
+
           gradle \
             --no-daemon \
             --stacktrace \
-            --warning-mode all \
+            --info \
             :app:assembleDebug
 
+      # 13. Verify APK
       - name: Verify APK
         shell: bash
         run: |
@@ -201,19 +211,35 @@ jobs:
 
           if [ ! -f "$APK" ]; then
             echo "ERROR: APK was not created."
+
+            echo "Searching build directory:"
+            find project/app/build -type f 2>/dev/null | head -200 || true
+
             exit 1
           fi
 
-          echo
+          echo ""
           echo "======================================"
           echo "APK CREATED SUCCESSFULLY"
           echo "======================================"
 
           ls -lh "$APK"
 
-      - name: Upload APK
+      # 14. Upload APK
+      - name: Upload Debug APK
         uses: actions/upload-artifact@v4
         with:
           name: pharma-mentor-v51-debug-apk
           path: project/app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
+
+      # 15. Upload build reports if build fails
+      - name: Upload build reports
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pharma-mentor-v51-build-reports
+          path: |
+            project/app/build/reports/**
+            project/app/build/outputs/logs/**
+          if-no-files-found: ignore
