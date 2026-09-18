@@ -18,7 +18,6 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-
       - name: Checkout repository
         uses: actions/checkout@v4
 
@@ -28,136 +27,110 @@ jobs:
           distribution: temurin
           java-version: '17'
 
-      - name: Setup Gradle 8.10
+      - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v6
         with:
           gradle-version: '8.10'
 
-      - name: Setup Android SDK
-        uses: android-actions/setup-android@v3
-        with:
-          packages: ''
-
-      - name: Install Android SDK components
-        shell: bash
-        run: |
-          set -e
-
-          yes | sdkmanager --licenses >/dev/null 2>&1 || true
-
-          sdkmanager --install \
-            "platform-tools" \
-            "platforms;android-35" \
-            "build-tools;35.0.0"
-
       - name: Verify Android SDK
-        shell: bash
         run: |
-          set -e
-
           echo "ANDROID_HOME=$ANDROID_HOME"
-          echo "ANDROID_SDK_ROOT=$ANDROID_SDK_ROOT"
-
+          ls -la "$ANDROID_HOME"
           test -d "$ANDROID_HOME/platforms/android-35"
           test -d "$ANDROID_HOME/build-tools/35.0.0"
+          echo "Android SDK is ready."
 
-          echo "Android SDK 35 is ready."
-
-      - name: Check source archive
+      - name: Find and extract Pharma Mentor project
         shell: bash
         run: |
           set -e
 
-          ZIP="./PharmaMentor_V51_FULL_FIXED_READY_COMPILE_FIXED.zip"
+          ZIP_NAME="PharmaMentor_V51_FULL_FIXED_READY_COMPILE_FIXED.zip"
 
-          if [ ! -f "$ZIP" ]; then
-            echo "ERROR: Corrected source archive was not found:"
-            echo "$ZIP"
-            echo ""
-            echo "ZIP files currently in repository:"
-            find . -maxdepth 1 -type f -name '*.zip' -print
+          echo "Searching for: $ZIP_NAME"
+
+          ZIP_PATH="$(find . -type f -name "$ZIP_NAME" -print -quit)"
+
+          if [ -z "$ZIP_PATH" ]; then
+            echo "ERROR: $ZIP_NAME was not found."
+            echo "Files in repository:"
+            find . -maxdepth 3 -type f | sort
             exit 1
           fi
 
-          echo "Using corrected source archive:"
-          echo "$ZIP"
-
-      - name: Extract Pharma Mentor source
-        shell: bash
-        run: |
-          set -e
+          echo "Found ZIP:"
+          echo "$ZIP_PATH"
 
           rm -rf extracted project
           mkdir -p extracted project
 
-          ZIP="./PharmaMentor_V51_FULL_FIXED_READY_COMPILE_FIXED.zip"
+          unzip -q "$ZIP_PATH" -d extracted
 
-          unzip -q "$ZIP" -d extracted
+          echo "Extracted files:"
+          find extracted -maxdepth 4 -type f | sort | head -200
 
-          ROOT="$(dirname "$(find extracted -type f -name 'settings.gradle.kts' | head -n 1)")"
+          PROJECT_DIR="$(find extracted -type f -name "settings.gradle.kts" -print -quit | xargs -r dirname)"
 
-          if [ -z "$ROOT" ] || [ ! -f "$ROOT/settings.gradle.kts" ]; then
-            echo "ERROR: Gradle project root was not found."
+          if [ -z "$PROJECT_DIR" ]; then
+            PROJECT_DIR="$(find extracted -type f -name "settings.gradle" -print -quit | xargs -r dirname)"
+          fi
 
-            echo "Extracted files:"
-            find extracted -maxdepth 5 -type f | head -150
-
+          if [ -z "$PROJECT_DIR" ]; then
+            echo "ERROR: Gradle project was not found."
+            find extracted -maxdepth 6 -type f | sort
             exit 1
           fi
 
-          echo "Gradle project root: $ROOT"
+          echo "Gradle project found at:"
+          echo "$PROJECT_DIR"
 
-          cp -R "$ROOT"/. project/
+          cp -a "$PROJECT_DIR"/. project/
 
-      - name: Verify Gradle project
+          echo "Project verification:"
+          test -f project/settings.gradle.kts || test -f project/settings.gradle
+          test -f project/build.gradle.kts || test -f project/build.gradle
+
+          echo "Project copied successfully."
+
+      - name: Force Kotlin 1.9.24 compatibility
         shell: bash
+        working-directory: project
         run: |
           set -e
 
-          cd project
+          if [ -f build.gradle.kts ]; then
+            sed -i 's/id("org.jetbrains.kotlin.android") version "[^"]*" apply false/id("org.jetbrains.kotlin.android") version "1.9.24" apply false/' build.gradle.kts
+          fi
 
-          test -f settings.gradle.kts
-          test -f build.gradle.kts
-          test -f app/build.gradle.kts
-          test -f app/src/main/AndroidManifest.xml
-          test -f app/src/main/java/com/pharmamentor/app/MainActivity.kt
-          test -f app/src/main/java/com/pharmamentor/app/data/AdaptiveSessionEngine.kt
+          echo "Root build.gradle.kts:"
+          cat build.gradle.kts || true
 
-          echo "Gradle project verification passed."
-
-          echo "MainActivity lines:"
-          wc -l app/src/main/java/com/pharmamentor/app/MainActivity.kt
-
-          echo "AdaptiveSessionEngine:"
-          wc -l app/src/main/java/com/pharmamentor/app/data/AdaptiveSessionEngine.kt
+      - name: Make Gradle executable
+        working-directory: project
+        run: |
+          chmod +x gradlew || true
 
       - name: Build Debug APK
-        shell: bash
+        working-directory: project
         run: |
           set -e
 
-          cd project
-
-          gradle --no-daemon --stacktrace :app:assembleDebug
-
-      - name: Verify APK
-        shell: bash
-        run: |
-          set -e
-
-          APK="project/app/build/outputs/apk/debug/app-debug.apk"
-
-          if [ ! -f "$APK" ]; then
-            echo "ERROR: APK was not created."
-            exit 1
+          if [ -f ./gradlew ]; then
+            ./gradlew clean assembleDebug --stacktrace
+          else
+            gradle clean assembleDebug --stacktrace
           fi
 
-          echo "APK created successfully:"
-          ls -lh "$APK"
+      - name: Find APK
+        working-directory: project
+        run: |
+          echo "APK files:"
+          find . -type f -name "*.apk" -print
 
       - name: Upload Debug APK
         uses: actions/upload-artifact@v4
         with:
-          name: pharma-mentor-v51-debug-apk
-          path: project/app/build/outputs/apk/debug/app-debug.apk
+          name: Pharma-Mentor-debug-apk
+          path: |
+            project/**/build/outputs/apk/debug/*.apk
           if-no-files-found: error
