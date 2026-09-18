@@ -18,6 +18,7 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
+
       - name: Checkout repository
         uses: actions/checkout@v4
 
@@ -34,13 +35,20 @@ jobs:
 
       - name: Setup Android SDK
         uses: android-actions/setup-android@v3
+        with:
+          packages: ''
 
       - name: Install Android SDK components
         shell: bash
         run: |
           set -e
-          yes | sdkmanager --licenses >/dev/null
-          sdkmanager --install "platform-tools" "platforms;android-35" "build-tools;35.0.0"
+
+          yes | sdkmanager --licenses >/dev/null 2>&1 || true
+
+          sdkmanager --install \
+            "platform-tools" \
+            "platforms;android-35" \
+            "build-tools;35.0.0"
 
       - name: Verify Android SDK
         shell: bash
@@ -55,6 +63,25 @@ jobs:
 
           echo "Android SDK 35 is ready."
 
+      - name: Check source archive
+        shell: bash
+        run: |
+          set -e
+
+          ZIP="./PharmaMentor_V51_FULL_FIXED_READY_COMPILE_FIXED.zip"
+
+          if [ ! -f "$ZIP" ]; then
+            echo "ERROR: Corrected source archive was not found:"
+            echo "$ZIP"
+            echo ""
+            echo "ZIP files currently in repository:"
+            find . -maxdepth 1 -type f -name '*.zip' -print
+            exit 1
+          fi
+
+          echo "Using corrected source archive:"
+          echo "$ZIP"
+
       - name: Extract Pharma Mentor source
         shell: bash
         run: |
@@ -63,14 +90,7 @@ jobs:
           rm -rf extracted project
           mkdir -p extracted project
 
-          ZIP="$(find . -maxdepth 1 -type f -name '*.zip' | head -n 1)"
-
-          if [ -z "$ZIP" ]; then
-            echo "ERROR: No ZIP source file found in repository root."
-            exit 1
-          fi
-
-          echo "Using source archive: $ZIP"
+          ZIP="./PharmaMentor_V51_FULL_FIXED_READY_COMPILE_FIXED.zip"
 
           unzip -q "$ZIP" -d extracted
 
@@ -78,7 +98,10 @@ jobs:
 
           if [ -z "$ROOT" ] || [ ! -f "$ROOT/settings.gradle.kts" ]; then
             echo "ERROR: Gradle project root was not found."
-            find extracted -maxdepth 4 -type f | head -100
+
+            echo "Extracted files:"
+            find extracted -maxdepth 5 -type f | head -150
+
             exit 1
           fi
 
@@ -98,10 +121,15 @@ jobs:
           test -f app/build.gradle.kts
           test -f app/src/main/AndroidManifest.xml
           test -f app/src/main/java/com/pharmamentor/app/MainActivity.kt
+          test -f app/src/main/java/com/pharmamentor/app/data/AdaptiveSessionEngine.kt
 
           echo "Gradle project verification passed."
+
           echo "MainActivity lines:"
           wc -l app/src/main/java/com/pharmamentor/app/MainActivity.kt
+
+          echo "AdaptiveSessionEngine:"
+          wc -l app/src/main/java/com/pharmamentor/app/data/AdaptiveSessionEngine.kt
 
       - name: Build Debug APK
         shell: bash
@@ -109,6 +137,7 @@ jobs:
           set -e
 
           cd project
+
           gradle --no-daemon --stacktrace :app:assembleDebug
 
       - name: Verify APK
@@ -118,7 +147,10 @@ jobs:
 
           APK="project/app/build/outputs/apk/debug/app-debug.apk"
 
-          test -f "$APK"
+          if [ ! -f "$APK" ]; then
+            echo "ERROR: APK was not created."
+            exit 1
+          fi
 
           echo "APK created successfully:"
           ls -lh "$APK"
