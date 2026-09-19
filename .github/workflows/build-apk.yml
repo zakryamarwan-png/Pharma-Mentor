@@ -31,7 +31,7 @@ jobs:
           distribution: temurin
           java-version: '17'
 
-      # 3. Gradle
+      # 3. Gradle 8.10
       - name: Setup Gradle 8.10
         uses: gradle/actions/setup-gradle@v6
         with:
@@ -43,18 +43,25 @@ jobs:
         with:
           packages: ''
 
-      # 5. Install Android SDK
+      # 5. Install Android SDK components
       - name: Install Android SDK components
         shell: bash
         run: |
           set -e
 
+          echo "======================================"
+          echo "Android SDK configuration"
+          echo "======================================"
+
           echo "ANDROID_HOME=$ANDROID_HOME"
           echo "ANDROID_SDK_ROOT=$ANDROID_SDK_ROOT"
 
+          echo ""
           echo "Accepting Android SDK licenses..."
-          yes | sdkmanager --licenses >/dev/null || true
 
+          yes | sdkmanager --licenses >/dev/null 2>&1 || true
+
+          echo ""
           echo "Installing required SDK packages..."
 
           sdkmanager --install \
@@ -62,16 +69,28 @@ jobs:
             "platforms;android-35" \
             "build-tools;35.0.0"
 
+          echo ""
           echo "Android SDK installation completed."
 
-      # 6. Verify SDK
+      # 6. Verify Android SDK
       - name: Verify Android SDK
         shell: bash
         run: |
           set -e
 
-          test -d "$ANDROID_HOME/platforms/android-35"
-          test -d "$ANDROID_HOME/build-tools/35.0.0"
+          echo "======================================"
+          echo "Verifying Android SDK"
+          echo "======================================"
+
+          if [ ! -d "$ANDROID_HOME/platforms/android-35" ]; then
+            echo "ERROR: Android platform 35 not found."
+            exit 1
+          fi
+
+          if [ ! -d "$ANDROID_HOME/build-tools/35.0.0" ]; then
+            echo "ERROR: Build Tools 35.0.0 not found."
+            exit 1
+          fi
 
           echo "Android SDK 35: OK"
           echo "Build Tools 35.0.0: OK"
@@ -82,19 +101,30 @@ jobs:
         run: |
           set -e
 
-          echo "Repository files:"
+          echo "======================================"
+          echo "Repository files"
+          echo "======================================"
+
           ls -lah
 
           ZIP="PharmaMentor_V51_FULL_FIXED_READY.zip"
 
+          echo ""
+          echo "Checking source archive:"
+          echo "$ZIP"
+
           if [ ! -f "$ZIP" ]; then
+            echo ""
             echo "ERROR: $ZIP was not found."
+            echo ""
             echo "Available ZIP files:"
-            find . -maxdepth 1 -type f -name "*.zip" -print
+            find . -maxdepth 2 -type f -iname "*.zip" -print
             exit 1
           fi
 
-          echo "Using source archive: $ZIP"
+          echo ""
+          echo "Source archive found:"
+          ls -lh "$ZIP"
 
           echo "SOURCE_ZIP=$ZIP" >> "$GITHUB_ENV"
 
@@ -104,63 +134,115 @@ jobs:
         run: |
           set -e
 
-          rm -rf extracted project
+          echo "======================================"
+          echo "Extracting Pharma Mentor source"
+          echo "======================================"
+
+          rm -rf extracted
+          rm -rf project
 
           mkdir -p extracted
-          mkdir -p project
 
-          echo "Extracting $SOURCE_ZIP ..."
+          echo "Using:"
+          echo "$SOURCE_ZIP"
 
           unzip -q "$SOURCE_ZIP" -d extracted
 
+          echo ""
+          echo "Top-level extracted directories:"
+          find extracted -maxdepth 2 -type d | sort
+
+          echo ""
           echo "Searching for Gradle project..."
 
-          ROOT="$(dirname "$(find extracted \
+          PROJECT_SETTINGS=$(find extracted \
             -type f \
-            -name 'settings.gradle.kts' \
-            | head -n 1)")"
+            -name "settings.gradle.kts" \
+            -print \
+            | head -n 1)
 
-          if [ -z "$ROOT" ] || [ ! -f "$ROOT/settings.gradle.kts" ]; then
-            echo "ERROR: Gradle project root was not found."
-
+          if [ -z "$PROJECT_SETTINGS" ]; then
+            echo ""
+            echo "ERROR: settings.gradle.kts was not found."
+            echo ""
             echo "Extracted files:"
-            find extracted -maxdepth 5 -type f | head -200
-
+            find extracted -maxdepth 6 -type f | sort | head -300
             exit 1
           fi
 
-          echo "Gradle project root:"
-          echo "$ROOT"
+          PROJECT_DIR=$(dirname "$PROJECT_SETTINGS")
 
-          cp -R "$ROOT"/. project/
+          echo ""
+          echo "Gradle project found at:"
+          echo "$PROJECT_DIR"
 
-      # 9. Verify project
-      - name: Verify Gradle project
+          echo ""
+          echo "Project contents:"
+          find "$PROJECT_DIR" -maxdepth 3 -type f | sort | head -200
+
+          echo ""
+          echo "Copying project..."
+
+          cp -R "$PROJECT_DIR" project
+
+          echo ""
+          echo "Project directory created:"
+          ls -lah project
+
+      # 9. Verify Gradle Project
+      - name: Verify Gradle Project
         shell: bash
         run: |
           set -e
 
           cd project
 
-          test -f settings.gradle.kts
-          test -f build.gradle.kts
-          test -f app/build.gradle.kts
-          test -f app/src/main/AndroidManifest.xml
-          test -f app/src/main/java/com/pharmamentor/app/MainActivity.kt
+          echo "======================================"
+          echo "Gradle project verification"
+          echo "======================================"
 
+          check_file() {
+            if [ -f "$1" ]; then
+              echo "PASS: $1"
+            else
+              echo "FAIL: $1"
+              echo ""
+              echo "Current project structure:"
+              find . -maxdepth 5 -type f | sort | head -300
+              exit 1
+            fi
+          }
+
+          check_file "settings.gradle.kts"
+          check_file "build.gradle.kts"
+          check_file "app/build.gradle.kts"
+          check_file "app/src/main/AndroidManifest.xml"
+          check_file "app/src/main/java/com/pharmamentor/app/MainActivity.kt"
+
+          echo ""
           echo "======================================"
           echo "Gradle project verification PASSED"
           echo "======================================"
 
-          echo "MainActivity:"
+          echo ""
+          echo "MainActivity information:"
           wc -l app/src/main/java/com/pharmamentor/app/MainActivity.kt
 
-      # 10. Verify Java and Gradle
-      - name: Verify Java and Gradle
+      # 10. Configure Java/Kotlin target
+      - name: Configure JVM target
         shell: bash
         run: |
           set -e
 
+          cd project
+
+          echo "======================================"
+          echo "Checking Gradle configuration"
+          echo "======================================"
+
+          grep -R "jvmTarget" -n app build.gradle.kts settings.gradle.kts 2>/dev/null || true
+
+          echo ""
           echo "Java version:"
           java -version
 
@@ -168,20 +250,8 @@ jobs:
           echo "Gradle version:"
           gradle --version
 
-      # 11. Clean
-      - name: Clean project
-        shell: bash
-        run: |
-          set -e
-
-          cd project
-
-          gradle \
-            --no-daemon \
-            clean
-
-      # 12. Build APK + Build Scan
-      - name: Build Debug APK with Build Scan
+      # 11. Check Gradle project
+      - name: Gradle clean
         shell: bash
         run: |
           set -e
@@ -189,55 +259,423 @@ jobs:
           cd project
 
           echo "======================================"
-          echo "BUILDING PHARMA MENTOR APK"
+          echo "Running Gradle clean"
           echo "======================================"
 
-          gradle \
-            --no-daemon \
+          gradle clean --stacktrace --no-daemon
+
+      # 12. Build Debug APK
+      - name: Build Debug APK
+        shell: bash
+        run: |
+          set -e
+
+          cd project
+
+          echo "======================================"
+          echo "Building Pharma Mentor Debug APK"
+          echo "======================================"
+
+          gradle assembleDebug \
             --stacktrace \
-            --scan \
-            :app:assembleDebug
+            --no-daemon \
+            --warning-mode all
 
-      # 13. Verify APK
-      - name: Verify APK
+      # 13. Locate APK
+      - name: Locate APK
         shell: bash
         run: |
           set -e
 
-          APK="project/app/build/outputs/apk/debug/app-debug.apk"
+          cd project
 
-          if [ ! -f "$APK" ]; then
-            echo "ERROR: APK was not created."
+          echo "======================================"
+          echo "Searching for APK"
+          echo "======================================"
 
-            echo "Searching build outputs..."
-            find project/app/build -type f 2>/dev/null | head -200 || true
+          find app/build/outputs/apk -type f -name "*.apk" -print
 
+          APK=$(find app/build/outputs/apk \
+            -type f \
+            -name "*.apk" \
+            | head -n 1)
+
+          if [ -z "$APK" ]; then
+            echo ""
+            echo "ERROR: APK was not generated."
             exit 1
           fi
 
           echo ""
-          echo "======================================"
-          echo "APK CREATED SUCCESSFULLY"
-          echo "======================================"
+          echo "APK found:"
+          echo "$APK"
 
-          ls -lh "$APK"
+          mkdir -p ../artifacts
+
+          cp "$APK" ../artifacts/PharmaMentor-debug.apk
+
+          echo ""
+          echo "Final APK:"
+          ls -lh ../artifacts/PharmaMentor-debug.apk
 
       # 14. Upload APK
-      - name: Upload Debug APK
+      - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: pharma-mentor-v51-debug-apk
-          path: project/app/build/outputs/apk/debug/app-debug.apk
+          name: PharmaMentor-Debug-APK
+          path: artifacts/PharmaMentor-debug.apk
           if-no-files-found: error
-          retention-days: 30
 
-      # 15. Upload reports if build fails
-      - name: Upload build reports
-        if: failure()
+      # 15. Build summary
+      - name: Build summary
+        shell: bash
+        run: |
+          echo "======================================"
+          echo "PHARMA MENTOR BUILD COMPLETED"
+          echo "======================================"
+          echo ""
+          echo "APK artifact:"
+          echo "PharmaMentor-Debug-APK"
+          echo ""
+          echo "File:"
+          ls -lh artifacts/PharmaMentor-debug.apkname: Pharma Mentor APK Build
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+env:
+  ANDROID_HOME: /usr/local/lib/android/sdk
+  ANDROID_SDK_ROOT: /usr/local/lib/android/sdk
+
+jobs:
+  build:
+    name: Build Pharma Mentor APK
+    runs-on: ubuntu-latest
+
+    steps:
+
+      # 1. Checkout
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # 2. Java 17
+      - name: Setup Java 17
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      # 3. Gradle 8.10
+      - name: Setup Gradle 8.10
+        uses: gradle/actions/setup-gradle@v6
+        with:
+          gradle-version: '8.10'
+
+      # 4. Android SDK
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v4
+        with:
+          packages: ''
+
+      # 5. Install Android SDK components
+      - name: Install Android SDK components
+        shell: bash
+        run: |
+          set -e
+
+          echo "======================================"
+          echo "Android SDK configuration"
+          echo "======================================"
+
+          echo "ANDROID_HOME=$ANDROID_HOME"
+          echo "ANDROID_SDK_ROOT=$ANDROID_SDK_ROOT"
+
+          echo ""
+          echo "Accepting Android SDK licenses..."
+
+          yes | sdkmanager --licenses >/dev/null 2>&1 || true
+
+          echo ""
+          echo "Installing required SDK packages..."
+
+          sdkmanager --install \
+            "platform-tools" \
+            "platforms;android-35" \
+            "build-tools;35.0.0"
+
+          echo ""
+          echo "Android SDK installation completed."
+
+      # 6. Verify Android SDK
+      - name: Verify Android SDK
+        shell: bash
+        run: |
+          set -e
+
+          echo "======================================"
+          echo "Verifying Android SDK"
+          echo "======================================"
+
+          if [ ! -d "$ANDROID_HOME/platforms/android-35" ]; then
+            echo "ERROR: Android platform 35 not found."
+            exit 1
+          fi
+
+          if [ ! -d "$ANDROID_HOME/build-tools/35.0.0" ]; then
+            echo "ERROR: Build Tools 35.0.0 not found."
+            exit 1
+          fi
+
+          echo "Android SDK 35: OK"
+          echo "Build Tools 35.0.0: OK"
+
+      # 7. Locate source ZIP
+      - name: Locate Pharma Mentor source
+        shell: bash
+        run: |
+          set -e
+
+          echo "======================================"
+          echo "Repository files"
+          echo "======================================"
+
+          ls -lah
+
+          ZIP="PharmaMentor_V51_FULL_FIXED_READY.zip"
+
+          echo ""
+          echo "Checking source archive:"
+          echo "$ZIP"
+
+          if [ ! -f "$ZIP" ]; then
+            echo ""
+            echo "ERROR: $ZIP was not found."
+            echo ""
+            echo "Available ZIP files:"
+            find . -maxdepth 2 -type f -iname "*.zip" -print
+            exit 1
+          fi
+
+          echo ""
+          echo "Source archive found:"
+          ls -lh "$ZIP"
+
+          echo "SOURCE_ZIP=$ZIP" >> "$GITHUB_ENV"
+
+      # 8. Extract source
+      - name: Extract Pharma Mentor source
+        shell: bash
+        run: |
+          set -e
+
+          echo "======================================"
+          echo "Extracting Pharma Mentor source"
+          echo "======================================"
+
+          rm -rf extracted
+          rm -rf project
+
+          mkdir -p extracted
+
+          echo "Using:"
+          echo "$SOURCE_ZIP"
+
+          unzip -q "$SOURCE_ZIP" -d extracted
+
+          echo ""
+          echo "Top-level extracted directories:"
+          find extracted -maxdepth 2 -type d | sort
+
+          echo ""
+          echo "Searching for Gradle project..."
+
+          PROJECT_SETTINGS=$(find extracted \
+            -type f \
+            -name "settings.gradle.kts" \
+            -print \
+            | head -n 1)
+
+          if [ -z "$PROJECT_SETTINGS" ]; then
+            echo ""
+            echo "ERROR: settings.gradle.kts was not found."
+            echo ""
+            echo "Extracted files:"
+            find extracted -maxdepth 6 -type f | sort | head -300
+            exit 1
+          fi
+
+          PROJECT_DIR=$(dirname "$PROJECT_SETTINGS")
+
+          echo ""
+          echo "Gradle project found at:"
+          echo "$PROJECT_DIR"
+
+          echo ""
+          echo "Project contents:"
+          find "$PROJECT_DIR" -maxdepth 3 -type f | sort | head -200
+
+          echo ""
+          echo "Copying project..."
+
+          cp -R "$PROJECT_DIR" project
+
+          echo ""
+          echo "Project directory created:"
+          ls -lah project
+
+      # 9. Verify Gradle Project
+      - name: Verify Gradle Project
+        shell: bash
+        run: |
+          set -e
+
+          cd project
+
+          echo "======================================"
+          echo "Gradle project verification"
+          echo "======================================"
+
+          check_file() {
+            if [ -f "$1" ]; then
+              echo "PASS: $1"
+            else
+              echo "FAIL: $1"
+              echo ""
+              echo "Current project structure:"
+              find . -maxdepth 5 -type f | sort | head -300
+              exit 1
+            fi
+          }
+
+          check_file "settings.gradle.kts"
+          check_file "build.gradle.kts"
+          check_file "app/build.gradle.kts"
+          check_file "app/src/main/AndroidManifest.xml"
+          check_file "app/src/main/java/com/pharmamentor/app/MainActivity.kt"
+
+          echo ""
+          echo "======================================"
+          echo "Gradle project verification PASSED"
+          echo "======================================"
+
+          echo ""
+          echo "MainActivity information:"
+          wc -l app/src/main/java/com/pharmamentor/app/MainActivity.kt
+
+      # 10. Configure Java/Kotlin target
+      - name: Configure JVM target
+        shell: bash
+        run: |
+          set -e
+
+          cd project
+
+          echo "======================================"
+          echo "Checking Gradle configuration"
+          echo "======================================"
+
+          grep -R "jvmTarget" -n app build.gradle.kts settings.gradle.kts 2>/dev/null || true
+
+          echo ""
+          echo "Java version:"
+          java -version
+
+          echo ""
+          echo "Gradle version:"
+          gradle --version
+
+      # 11. Check Gradle project
+      - name: Gradle clean
+        shell: bash
+        run: |
+          set -e
+
+          cd project
+
+          echo "======================================"
+          echo "Running Gradle clean"
+          echo "======================================"
+
+          gradle clean --stacktrace --no-daemon
+
+      # 12. Build Debug APK
+      - name: Build Debug APK
+        shell: bash
+        run: |
+          set -e
+
+          cd project
+
+          echo "======================================"
+          echo "Building Pharma Mentor Debug APK"
+          echo "======================================"
+
+          gradle assembleDebug \
+            --stacktrace \
+            --no-daemon \
+            --warning-mode all
+
+      # 13. Locate APK
+      - name: Locate APK
+        shell: bash
+        run: |
+          set -e
+
+          cd project
+
+          echo "======================================"
+          echo "Searching for APK"
+          echo "======================================"
+
+          find app/build/outputs/apk -type f -name "*.apk" -print
+
+          APK=$(find app/build/outputs/apk \
+            -type f \
+            -name "*.apk" \
+            | head -n 1)
+
+          if [ -z "$APK" ]; then
+            echo ""
+            echo "ERROR: APK was not generated."
+            exit 1
+          fi
+
+          echo ""
+          echo "APK found:"
+          echo "$APK"
+
+          mkdir -p ../artifacts
+
+          cp "$APK" ../artifacts/PharmaMentor-debug.apk
+
+          echo ""
+          echo "Final APK:"
+          ls -lh ../artifacts/PharmaMentor-debug.apk
+
+      # 14. Upload APK
+      - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: pharma-mentor-v51-build-reports
-          path: |
-            project/app/build/reports/**
-            project/app/build/outputs/logs/**
-          if-no-files-found: ignore
+          name: PharmaMentor-Debug-APK
+          path: artifacts/PharmaMentor-debug.apk
+          if-no-files-found: error
+
+      # 15. Build summary
+      - name: Build summary
+        shell: bash
+        run: |
+          echo "======================================"
+          echo "PHARMA MENTOR BUILD COMPLETED"
+          echo "======================================"
+          echo ""
+          echo "APK artifact:"
+          echo "PharmaMentor-Debug-APK"
+          echo ""
+          echo "File:"
+          ls -lh artifacts/PharmaMentor-debug.apk
