@@ -31,7 +31,7 @@ jobs:
           distribution: temurin
           java-version: '17'
 
-      # 3. Setup Gradle
+      # 3. Setup Gradle 8.10
       - name: Setup Gradle 8.10
         uses: gradle/actions/setup-gradle@v6
         with:
@@ -41,16 +41,18 @@ jobs:
       - name: Setup Android SDK
         uses: android-actions/setup-android@v4
 
-      # 5. Install Android SDK
+      # 5. Install Android SDK components
       - name: Install Android SDK components
         shell: bash
         run: |
           set -e
 
-          echo "Accepting Android SDK licenses..."
+          echo "========================================"
+          echo "ANDROID SDK SETUP"
+          echo "========================================"
+
           yes | sdkmanager --licenses >/dev/null 2>&1 || true
 
-          echo "Installing required Android SDK packages..."
           sdkmanager --install \
             "platform-tools" \
             "platforms;android-35" \
@@ -69,83 +71,110 @@ jobs:
           echo "Build Tools 35.0.0: OK"
 
       # 7. Locate exact source ZIP
-      - name: Locate Pharma Mentor source
+      - name: Locate exact source ZIP
         shell: bash
         run: |
           set -e
 
           ZIP="PharmaMentor_V51_FULL_FIXED_READY.zip"
 
-          echo "Looking for: $ZIP"
+          echo "========================================"
+          echo "LOCATING SOURCE ZIP"
+          echo "========================================"
 
           if [ ! -f "$ZIP" ]; then
             echo "ERROR: $ZIP was not found."
             echo ""
-            echo "ZIP files available in repository:"
-            find . -maxdepth 1 -type f -name "*.zip" -print
+            echo "Repository root:"
+            ls -lah
+            echo ""
+            echo "ZIP files found:"
+            find . -maxdepth 3 -type f -name "*.zip" -print
             exit 1
           fi
 
           echo "SOURCE ZIP FOUND:"
           ls -lh "$ZIP"
 
-          echo "SOURCE_ZIP=$ZIP" >> "$GITHUB_ENV"
+          echo ""
+          echo "ZIP CONTENT CHECK:"
+          unzip -t "$ZIP" >/dev/null
+
+          echo "ZIP integrity: OK"
 
       # 8. Extract source ZIP
-      - name: Extract Pharma Mentor source
+      - name: Extract source ZIP
         shell: bash
         run: |
           set -e
 
-          rm -rf extracted project
-          mkdir -p extracted project
+          ZIP="PharmaMentor_V51_FULL_FIXED_READY.zip"
 
-          echo "Extracting $SOURCE_ZIP ..."
+          echo "========================================"
+          echo "EXTRACTING SOURCE ZIP"
+          echo "========================================"
 
-          unzip -q "$SOURCE_ZIP" -d extracted
+          rm -rf project
+          mkdir -p project
 
+          unzip -q "$ZIP" -d project
+
+          echo "Initial extraction completed."
+
+          echo ""
           echo "Searching for Gradle project..."
 
-          ROOT="$(dirname "$(find extracted \
-            -type f \
-            -name 'settings.gradle.kts' \
-            -print -quit)")"
+          if [ -f "project/settings.gradle.kts" ] || [ -f "project/settings.gradle" ]; then
+            echo "Gradle project found directly in project/"
+          else
+            SETTINGS_FILE=$(find project -maxdepth 4 \
+              \( -name "settings.gradle.kts" -o -name "settings.gradle" \) \
+              -print -quit)
 
-          if [ -z "$ROOT" ] || [ ! -f "$ROOT/settings.gradle.kts" ]; then
-            echo "ERROR: Gradle project root was not found."
+            if [ -z "$SETTINGS_FILE" ]; then
+              echo "ERROR: Gradle project root was not found."
+              echo ""
+              echo "Extracted files:"
+              find project -maxdepth 4 -type f | head -200
+              exit 1
+            fi
 
-            echo "Extracted files:"
-            find extracted -maxdepth 6 -type f | head -300
+            ROOT_DIR=$(dirname "$SETTINGS_FILE")
 
-            exit 1
+            echo "Gradle project detected at:"
+            echo "$ROOT_DIR"
+
+            if [ "$ROOT_DIR" != "project" ]; then
+              shopt -s dotglob
+
+              TEMP_PROJECT="project_root_temp"
+              rm -rf "$TEMP_PROJECT"
+              mkdir -p "$TEMP_PROJECT"
+
+              mv "$ROOT_DIR"/* "$TEMP_PROJECT"/
+
+              rm -rf project
+              mv "$TEMP_PROJECT" project
+            fi
           fi
 
-          echo "Gradle project found at:"
-          echo "$ROOT"
+          echo ""
+          echo "FINAL PROJECT ROOT:"
+          ls -lah project
 
-          cp -R "$ROOT"/. project/
+          test -f project/settings.gradle.kts || \
+          test -f project/settings.gradle
 
-      # 9. Verify project
-      - name: Verify Gradle project
-        shell: bash
-        run: |
-          set -e
+          test -f project/build.gradle.kts || \
+          test -f project/build.gradle
 
-          cd project
-
-          echo "Checking Gradle project..."
-
-          test -f settings.gradle.kts
-          test -f build.gradle.kts
-          test -f app/build.gradle.kts
-          test -f app/src/main/AndroidManifest.xml
-          test -f app/src/main/java/com/pharmamentor/app/MainActivity.kt
+          test -d project/app
 
           echo ""
-          echo "Gradle project verification PASSED"
+          echo "Gradle project verification: PASSED"
 
-      # 10. Show project information
-      - name: Show project information
+      # 9. Verify Room entities BEFORE Gradle
+      - name: Verify Room entities
         shell: bash
         run: |
           set -e
@@ -153,38 +182,141 @@ jobs:
           cd project
 
           echo "========================================"
-          echo "PROJECT INFORMATION"
+          echo "VERIFYING ROOM DATABASE"
           echo "========================================"
 
-          echo "Gradle:"
-          gradle --version
+          DB="app/src/main/java/com/pharmamentor/app/data/AppDatabase.kt"
+          DATA="app/src/main/java/com/pharmamentor/app/data/AchievementData.kt"
+          DAO="app/src/main/java/com/pharmamentor/app/data/AchievementDao.kt"
+
+          echo "Checking required files..."
+
+          test -f "$DB" || {
+            echo "ERROR: AppDatabase.kt not found"
+            exit 1
+          }
+
+          test -f "$DATA" || {
+            echo "ERROR: AchievementData.kt not found"
+            exit 1
+          }
+
+          test -f "$DAO" || {
+            echo "ERROR: AchievementDao.kt not found"
+            exit 1
+          }
+
+          echo "Required files: OK"
 
           echo ""
+          echo "Checking AchievementProgressEntity..."
+
+          grep -q "data class AchievementProgressEntity" "$DATA" || {
+            echo "ERROR: AchievementProgressEntity declaration not found"
+            exit 1
+          }
+
+          grep -q "AchievementProgressEntity::class" "$DB" || {
+            echo "ERROR: AchievementProgressEntity is NOT registered in AppDatabase"
+            exit 1
+          }
+
+          echo "AchievementProgressEntity: OK"
+
+          echo ""
+          echo "Checking DailyChallengeEntity..."
+
+          grep -q "data class DailyChallengeEntity" "$DATA" || {
+            echo "ERROR: DailyChallengeEntity declaration not found"
+            exit 1
+          }
+
+          grep -q "DailyChallengeEntity::class" "$DB" || {
+            echo "ERROR: DailyChallengeEntity is NOT registered in AppDatabase"
+            exit 1
+          }
+
+          echo "DailyChallengeEntity: OK"
+
+          echo ""
+          echo "Checking Room database version..."
+
+          grep -q "version = 18" "$DB" || {
+            echo "ERROR: Room database version 18 was not found"
+            exit 1
+          }
+
+          echo "Room version 18: OK"
+
+          echo ""
+          echo "Checking AchievementDao tables..."
+
+          grep -q "achievement_progress" "$DAO" || {
+            echo "ERROR: achievement_progress not found in AchievementDao"
+            exit 1
+          }
+
+          grep -q "daily_challenges" "$DAO" || {
+            echo "ERROR: daily_challenges not found in AchievementDao"
+            exit 1
+          }
+
+          echo "DAO table references: OK"
+
+          echo ""
+          echo "========================================"
+          echo "ROOM ENTITY VERIFICATION: PASSED"
+          echo "========================================"
+
+          echo ""
+          echo "Registered entities in AppDatabase:"
+          grep "@Database" "$DB" || true
+
+      # 10. Show Gradle project configuration
+      - name: Verify Gradle project configuration
+        shell: bash
+        run: |
+          set -e
+
+          cd project
+
+          echo "========================================"
+          echo "GRADLE PROJECT CONFIGURATION"
+          echo "========================================"
+
           echo "Java:"
           java -version
 
           echo ""
-          echo "MainActivity:"
-          wc -l app/src/main/java/com/pharmamentor/app/MainActivity.kt
+          echo "Gradle:"
+          gradle --version
 
           echo ""
-          echo "========================================"
+          echo "Project files:"
+          ls -lah
 
-      # 11. Clean project
-      - name: Clean project
+          echo ""
+          echo "App files:"
+          ls -lah app
+
+      # 11. Clean build
+      - name: Gradle clean
         shell: bash
         run: |
           set -e
 
           cd project
 
-          echo "Cleaning project..."
+          echo "========================================"
+          echo "GRADLE CLEAN"
+          echo "========================================"
 
           gradle \
             --no-daemon \
+            --stacktrace \
             clean
 
-      # 12. Build Debug APK + Build Scan
+      # 12. Build APK
       - name: Build Debug APK
         shell: bash
         run: |
@@ -199,7 +331,6 @@ jobs:
           gradle \
             --no-daemon \
             --stacktrace \
-            --scan \
             :app:assembleDebug
 
       # 13. Verify APK
@@ -208,43 +339,30 @@ jobs:
         run: |
           set -e
 
-          APK="project/app/build/outputs/apk/debug/app-debug.apk"
+          cd project
 
           echo "========================================"
           echo "VERIFYING APK"
           echo "========================================"
 
-          if [ ! -f "$APK" ]; then
-            echo "ERROR: APK was not created."
+          APK="app/build/outputs/apk/debug/app-debug.apk"
 
-            echo ""
-            echo "Available build files:"
-            find project/app/build -type f 2>/dev/null | head -300 || true
+          test -f "$APK"
 
-            exit 1
-          fi
-
+          echo "APK BUILD: SUCCESS"
           echo ""
-          echo "APK CREATED SUCCESSFULLY:"
+          echo "APK:"
           ls -lh "$APK"
 
-      # 14. Upload APK
-      - name: Upload Debug APK
+          echo ""
+          echo "SHA256:"
+          sha256sum "$APK"
+
+      # 14. Upload APK artifact
+      - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: pharma-mentor-v51-debug-apk
+          name: PharmaMentor-V51-Debug-APK
           path: project/app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
-          retention-days: 30
-
-      # 15. Upload build reports if failed
-      - name: Upload build reports
-        if: failure()
-        uses: actions/upload-artifact@v4
-        with:
-          name: pharma-mentor-v51-build-reports
-          path: |
-            project/app/build/reports/**
-            project/app/build/outputs/logs/**
-          if-no-files-found: ignore
           retention-days: 14
