@@ -180,8 +180,8 @@ jobs:
             --no-daemon \
             clean
 
-      # 12. Build APK + Build Scan
-      - name: Build Debug APK with Build Scan
+      # 12. Build APK (تمت إزالة --scan بنجاح)
+      - name: Build Debug APK
         shell: bash
         run: |
           set -e
@@ -195,7 +195,6 @@ jobs:
           gradle \
             --no-daemon \
             --stacktrace \
-            --scan \
             :app:assembleDebug
 
       # 13. Verify APK
@@ -241,3 +240,4 @@ jobs:
             project/app/build/reports/**
             project/app/build/outputs/logs/**
           if-no-files-found: ignore
+
