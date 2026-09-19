@@ -31,12 +31,11 @@ jobs:
           distribution: temurin
           java-version: '17'
 
-      # 3. Gradle (تمت إضافة cache-provider: basic)
+      # 3. Gradle
       - name: Setup Gradle 8.10
         uses: gradle/actions/setup-gradle@v6
         with:
           gradle-version: '8.10'
-          cache-provider: basic
 
       # 4. Android SDK
       - name: Setup Android SDK
@@ -181,7 +180,7 @@ jobs:
             --no-daemon \
             clean
 
-      # 12. Build APK
+      # 12. Build APK (تمت إزالة --scan بنجاح)
       - name: Build Debug APK
         shell: bash
         run: |
@@ -241,4 +240,3 @@ jobs:
             project/app/build/reports/**
             project/app/build/outputs/logs/**
           if-no-files-found: ignore
-
