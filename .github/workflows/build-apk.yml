@@ -1,57 +1,176 @@
-name: PharmaMentor V51 CI/CD Pipeline
+name: Pharma Mentor APK Build
 
 on:
+  workflow_dispatch:
   push:
-    branches: [ "main", "master" ]
-  pull_request:
-    branches: [ "main", "master" ]
-  workflow_dispatch: # يتيح تشغيل البناء يدوياً بضغطة زر من الهاتف
+    branches:
+      - main
+
+permissions:
+  contents: read
 
 jobs:
   build:
-    name: Build & Export APKs
+    name: Build Pharma Mentor APK
     runs-on: ubuntu-latest
 
     steps:
-      # 1. جلب شفرة المشروع الكاملة
-      - name: Checkout Code
+      # 1. Checkout
+      - name: Checkout repository
         uses: actions/checkout@v4
 
-      # 2. إعداد بيئة Java (JDK 17) وتفعيل تسريع Gradle
-      - name: Set up JDK 17
+      # 2. Setup Java 17
+      - name: Setup Java 17
         uses: actions/setup-java@v4
         with:
+          distribution: temurin
           java-version: '17'
-          distribution: 'temurin'
-          cache: gradle
 
-      # 3. منح صلاحيات التنفيذ لملف gradlew (تفادي أخطاء الصلاحيات)
-      - name: Grant Execute Permission for Gradlew
-        run: chmod +x gradlew
+      # 3. Setup Gradle
+      - name: Setup Gradle 8.10
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.10'
 
-      # 4. تجميع نسخة التجربة (Debug APK)
+      # 4. Setup Android SDK
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+
+      # 5. Install Android SDK components
+      - name: Install Android SDK components
+        shell: bash
+        run: |
+          set -e
+          echo "Accepting Android SDK licenses..."
+          yes | sdkmanager --licenses >/dev/null || true
+
+          echo "Installing required SDK packages..."
+          sdkmanager --install \
+            "platform-tools" \
+            "platforms;android-35" \
+            "build-tools;35.0.0"
+
+      # 6. Verify SDK
+      - name: Verify Android SDK
+        shell: bash
+        run: |
+          set -e
+          test -d "$ANDROID_HOME/platforms/android-35"
+          test -d "$ANDROID_HOME/build-tools/35.0.0"
+          echo "Android SDK 35: OK"
+          echo "Build Tools 35.0.0: OK"
+
+      # 7. Locate source ZIP
+      - name: Locate Pharma Mentor source
+        shell: bash
+        run: |
+          set -e
+          ZIP="PharmaMentor_V51_CLEAN_FIXED.zip"
+
+          if [ ! -f "$ZIP" ]; then
+            echo "ERROR: $ZIP was not found."
+            echo "Available ZIP files:"
+            find . -maxdepth 1 -type f -name "*.zip" -print
+            exit 1
+          fi
+
+          echo "Using source archive: $ZIP"
+          echo "SOURCE_ZIP=$ZIP" >> "$GITHUB_ENV"
+
+      # 8. Extract source
+      - name: Extract Pharma Mentor source
+        shell: bash
+        run: |
+          set -e
+          rm -rf extracted project
+          mkdir -p extracted project
+
+          echo "Extracting $SOURCE_ZIP ..."
+          unzip -q "$SOURCE_ZIP" -d extracted
+
+          echo "Searching for Gradle project..."
+          ROOT="$(dirname "$(find extracted -type f -name 'settings.gradle.kts' | head -n 1)")"
+
+          if [ -z "$ROOT" ] || [ ! -f "$ROOT/settings.gradle.kts" ]; then
+            echo "ERROR: Gradle project root was not found."
+            find extracted -maxdepth 5 -type f | head -200
+            exit 1
+          fi
+
+          echo "Gradle project root found at: $ROOT"
+          cp -R "$ROOT"/. project/
+
+      # 9. Verify project structure
+      - name: Verify Gradle project
+        shell: bash
+        run: |
+          set -e
+          cd project
+
+          test -f settings.gradle.kts
+          test -f build.gradle.kts
+          test -f app/build.gradle.kts
+          test -f app/src/main/AndroidManifest.xml
+          test -f app/src/main/java/com/pharmamentor/app/MainActivity.kt
+
+          echo "Gradle project verification PASSED"
+
+      # 10. Clean project
+      - name: Clean project
+        shell: bash
+        run: |
+          set -e
+          cd project
+          gradle --no-daemon clean
+
+      # 11. Build APK
       - name: Build Debug APK
-        run: ./gradlew assembleDebug --stacktrace
+        shell: bash
+        run: |
+          set -e
+          cd project
 
-      # 5. تجميع نسخة الإنتاج (Release APK)
-      - name: Build Release APK
-        run: ./gradlew assembleRelease --stacktrace
+          # إضافة إعدادات القبول التلقائي للشروط لمنع توقف --scan
+          gradle \
+            --no-daemon \
+            --stacktrace \
+            --scan \
+            -Dscan.termsOfServiceUrl="https://gradle.com/terms-of-service" \
+            -Dscan.termsOfService="yes" \
+            :app:assembleDebug
 
-      # 6. رفع ملف الـ Debug APK للتحميل
-      - name: Upload Debug APK Artifact
+      # 12. Verify APK output
+      - name: Verify APK
+        shell: bash
+        run: |
+          set -e
+          APK="project/app/build/outputs/apk/debug/app-debug.apk"
+
+          if [ ! -f "$APK" ]; then
+            echo "ERROR: APK was not created."
+            find project/app/build -type f 2>/dev/null | head -200 || true
+            exit 1
+          fi
+
+          echo "APK CREATED SUCCESSFULLY:"
+          ls -lh "$APK"
+
+      # 13. Upload APK Artifact
+      - name: Upload Debug APK
         uses: actions/upload-artifact@v4
-        if: always()
         with:
-          name: PharmaMentor-V51-Debug-APK
-          path: app/build/outputs/apk/debug/*.apk
-          retention-days: 14
-
-      # 7. رفع ملف الـ Release APK للتحميل
-      - name: Upload Release APK Artifact
-        uses: actions/upload-artifact@v4
-        if: always()
-        with:
-          name: PharmaMentor-V51-Release-APK
-          path: app/build/outputs/apk/release/*.apk
+          name: pharma-mentor-v51-debug-apk
+          path: project/app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
           retention-days: 30
 
+      # 14. Upload reports on failure
+      - name: Upload build reports
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pharma-mentor-v51-build-reports
+          path: |
+            project/app/build/reports/**
+            project/app/build/outputs/logs/**
+          if-no-files-found: ignore
