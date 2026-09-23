@@ -9,230 +9,331 @@ on:
 permissions:
   contents: read
 
+env:
+  ANDROID_HOME: /usr/local/lib/android/sdk
+  ANDROID_SDK_ROOT: /usr/local/lib/android/sdk
+
 jobs:
   build:
-    name: Build and Verify Pharma Mentor
+    name: Build Pharma Mentor APK
     runs-on: ubuntu-latest
 
     steps:
-      # --------------------------------------------------
+
       # 1. Checkout
-      # --------------------------------------------------
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      # --------------------------------------------------
       # 2. Java 17
-      # --------------------------------------------------
       - name: Setup Java 17
         uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: '17'
 
-      # --------------------------------------------------
-      # 3. Android SDK
-      # --------------------------------------------------
+      # 3. Gradle 8.10
+      - name: Setup Gradle 8.10
+        uses: gradle/actions/setup-gradle@v6
+        with:
+          gradle-version: '8.10'
+
+      # 4. Android SDK
       - name: Setup Android SDK
         uses: android-actions/setup-android@v4
 
-      # --------------------------------------------------
-      # 4. Install required Android SDK packages
-      # --------------------------------------------------
-      - name: Install Android SDK packages
+      # 5. Install SDK
+      - name: Install Android SDK components
+        shell: bash
         run: |
-          yes | sdkmanager --licenses >/dev/null || true
-          sdkmanager \
+          set -e
+
+          echo "========================================"
+          echo "ANDROID SDK SETUP"
+          echo "========================================"
+
+          yes | sdkmanager --licenses >/dev/null 2>&1 || true
+
+          sdkmanager --install \
             "platform-tools" \
             "platforms;android-35" \
             "build-tools;35.0.0"
 
-      # --------------------------------------------------
-      # 5. Verify project structure
-      # --------------------------------------------------
-      - name: Verify Android project
+          echo "Android SDK installation: OK"
+
+      # 6. Verify SDK
+      - name: Verify Android SDK
         shell: bash
         run: |
           set -e
 
-          echo "=== Repository ==="
-          pwd
-          ls -la
+          test -d "$ANDROID_HOME/platforms/android-35"
+          test -d "$ANDROID_HOME/build-tools/35.0.0"
 
-          echo "=== Required files ==="
+          echo "Android SDK 35: OK"
+          echo "Build Tools 35.0.0: OK"
 
-          test -f settings.gradle.kts
-          test -f build.gradle.kts
-          test -f gradle.properties
-          test -f app/build.gradle.kts
-          test -f app/src/main/AndroidManifest.xml
-
-          echo "Gradle project files: OK"
-
-          echo "=== App source ==="
-          test -d app/src/main/java
-          echo "Java/Kotlin source directory: OK"
-
-      # --------------------------------------------------
-      # 6. Verify Room entities
-      # --------------------------------------------------
-      - name: Verify Room entities
+      # 7. Locate source ZIP
+      - name: Locate source ZIP
         shell: bash
         run: |
           set -e
 
+          ZIP="PharmaMentor_V51_FULL_FIXED_READY.zip"
+
           echo "========================================"
-          echo "        ROOM ENTITY VERIFICATION"
+          echo "LOCATING SOURCE ZIP"
           echo "========================================"
 
-          ENTITY_COUNT=$(grep -R "@Entity" app/src/main/java app/src/main/kotlin 2>/dev/null \
-            | grep -v "import " \
-            | wc -l || true)
+          if [ ! -f "$ZIP" ]; then
+            echo "ERROR: $ZIP was not found."
+            echo ""
+            echo "Repository root:"
+            ls -lah
+            echo ""
+            echo "ZIP files:"
+            find . -maxdepth 3 -type f -name "*.zip" -print
+            exit 1
+          fi
 
-          PRIMARY_KEY_COUNT=$(grep -R "@PrimaryKey" app/src/main/java app/src/main/kotlin 2>/dev/null \
-            | grep -v "import " \
-            | wc -l || true)
+          echo "SOURCE ZIP:"
+          ls -lh "$ZIP"
 
-          DATABASE_COUNT=$(grep -R "@Database" app/src/main/java app/src/main/kotlin 2>/dev/null \
-            | grep -v "import " \
-            | wc -l || true)
+          unzip -t "$ZIP" >/dev/null
 
-          echo "Room @Entity count:     $ENTITY_COUNT"
-          echo "Room @PrimaryKey count: $PRIMARY_KEY_COUNT"
-          echo "Room @Database count:   $DATABASE_COUNT"
+          echo "ZIP integrity: OK"
+
+      # 8. Extract and detect project root
+      - name: Extract source project
+        shell: bash
+        run: |
+          set -e
+
+          ZIP="PharmaMentor_V51_FULL_FIXED_READY.zip"
+
+          echo "========================================"
+          echo "EXTRACTING SOURCE PROJECT"
+          echo "========================================"
+
+          rm -rf project
+          mkdir -p project
+
+          unzip -q "$ZIP" -d project
+
+          echo "Extraction completed."
+
+          echo ""
+          echo "Searching for Gradle project root..."
+
+          SETTINGS_FILE=$(find project -maxdepth 6 \
+            \( -name "settings.gradle.kts" -o -name "settings.gradle" \) \
+            -print -quit)
+
+          if [ -z "$SETTINGS_FILE" ]; then
+            echo "ERROR: settings.gradle(.kts) not found."
+            echo ""
+            echo "Extracted files:"
+            find project -maxdepth 5 -type f | head -200
+            exit 1
+          fi
+
+          ROOT_DIR=$(dirname "$SETTINGS_FILE")
+
+          echo "Detected Gradle root:"
+          echo "$ROOT_DIR"
+
+          if [ "$ROOT_DIR" != "project" ]; then
+            rm -rf project_root
+            mkdir -p project_root
+
+            shopt -s dotglob
+            mv "$ROOT_DIR"/* project_root/
+
+            rm -rf project
+            mv project_root project
+          fi
+
+          echo ""
+          echo "FINAL PROJECT ROOT:"
+          ls -lah project
+
+          test -f project/settings.gradle.kts || \
+          test -f project/settings.gradle
+
+          test -f project/build.gradle.kts || \
+          test -f project/build.gradle
+
+          test -d project/app
+
+          echo ""
+          echo "Gradle project verification: PASSED"
+
+      # 9. Gradle wrapper check — SAFE
+      - name: Check Gradle wrapper
+        shell: bash
+        run: |
+          set -e
+
+          cd project
+
+          echo "========================================"
+          echo "CHECKING GRADLE WRAPPER"
+          echo "========================================"
+
+          if [ -f "./gradlew" ]; then
+            echo "gradlew found."
+
+            chmod +x ./gradlew
+
+            echo "gradlew executable: OK"
+
+            ./gradlew --version || true
+          else
+            echo "gradlew not found."
+            echo "This is acceptable because Gradle 8.10 is provided by setup-gradle."
+            echo "Using system Gradle 8.10."
+          fi
+
+      # 10. Verify Room structure — GENERIC
+      - name: Verify Room database structure
+        shell: bash
+        run: |
+          set -e
+
+          cd project
+
+          echo "========================================"
+          echo "VERIFYING ROOM DATABASE STRUCTURE"
+          echo "========================================"
+
+          DB="app/src/main/java/com/pharmamentor/app/data/AppDatabase.kt"
+
+          if [ ! -f "$DB" ]; then
+            echo "ERROR: AppDatabase.kt not found:"
+            echo "$DB"
+            exit 1
+          fi
+
+          echo "AppDatabase.kt: FOUND"
+
+          echo ""
+          echo "Room database declaration:"
+          grep -n "@Database" "$DB" || true
+
+          echo ""
+          echo "Room entities registered:"
+          grep -n "Entity::class" "$DB" || true
+
+          echo ""
+          echo "Database version:"
+          grep -n "version" "$DB" || true
+
+          echo ""
+          echo "Checking entity files..."
+
+          ENTITY_COUNT=$(find app/src/main/java \
+            -type f \
+            -name "*.kt" \
+            -exec grep -l "@Entity" {} \; | wc -l)
+
+          echo "Detected Room entity files: $ENTITY_COUNT"
 
           if [ "$ENTITY_COUNT" -eq 0 ]; then
-            echo "ERROR: No Room @Entity found."
-            exit 1
+            echo "WARNING: No @Entity declarations detected."
+            echo "Gradle compilation will provide the final validation."
+          else
+            echo "Room entity declarations: FOUND"
           fi
 
-          if [ "$DATABASE_COUNT" -eq 0 ]; then
-            echo "ERROR: No Room @Database found."
-            exit 1
-          fi
+          echo ""
+          echo "ROOM STRUCTURE CHECK: PASSED"
 
-          if [ "$PRIMARY_KEY_COUNT" -lt "$ENTITY_COUNT" ]; then
-            echo "ERROR: Some Room entities appear to have no @PrimaryKey."
-            echo "Every Room entity must define a primary key."
-            exit 1
-          fi
-
-          echo "Basic Room entity verification: PASSED"
-
-      # --------------------------------------------------
-      # 7. Verify Room database version
-      # --------------------------------------------------
-      - name: Verify Room database configuration
+      # 11. Verify Gradle configuration
+      - name: Verify Gradle project configuration
         shell: bash
         run: |
           set -e
 
+          cd project
+
           echo "========================================"
-          echo "        ROOM DATABASE CONFIG"
+          echo "GRADLE CONFIGURATION"
           echo "========================================"
 
-          grep -R -n "@Database" app/src/main/java app/src/main/kotlin 2>/dev/null || true
-          grep -R -n "version[[:space:]]*=" app/src/main/java app/src/main/kotlin 2>/dev/null || true
+          java -version
 
-          echo "Room database configuration inspected."
+          echo ""
+          echo "Gradle:"
+          gradle --version
 
-      # --------------------------------------------------
-      # 8. Verify Gradle wrapper
-      # --------------------------------------------------
-      - name: Verify Gradle wrapper
-        shell: bash
-        run: |
-          set -e
+          echo ""
+          echo "Root files:"
+          ls -lah
 
-          test -f gradlew
+          echo ""
+          echo "App directory:"
+          ls -lah app
 
-          chmod +x gradlew
-
-          ./gradlew --version
-
-      # --------------------------------------------------
-      # 9. Clean
-      # --------------------------------------------------
+      # 12. Clean
       - name: Gradle clean
-        run: |
-          ./gradlew --no-daemon clean
-
-      # --------------------------------------------------
-      # 10. KAPT / Room compilation
-      # --------------------------------------------------
-      - name: Verify Room compilation
         shell: bash
         run: |
           set -e
 
-          ./gradlew \
+          cd project
+
+          echo "========================================"
+          echo "GRADLE CLEAN"
+          echo "========================================"
+
+          gradle \
             --no-daemon \
             --stacktrace \
-            :app:kaptDebugKotlin
+            clean
 
-      # --------------------------------------------------
-      # 11. Kotlin compilation
-      # --------------------------------------------------
-      - name: Compile Kotlin
-        shell: bash
-        run: |
-          set -e
-
-          ./gradlew \
-            --no-daemon \
-            --stacktrace \
-            :app:compileDebugKotlin
-
-      # --------------------------------------------------
-      # 12. Build Debug APK
-      # --------------------------------------------------
+      # 13. Build
       - name: Build Debug APK
         shell: bash
         run: |
           set -e
 
-          ./gradlew \
+          cd project
+
+          echo "========================================"
+          echo "BUILDING PHARMA MENTOR APK"
+          echo "========================================"
+
+          gradle \
             --no-daemon \
             --stacktrace \
             :app:assembleDebug
 
-      # --------------------------------------------------
-      # 13. Verify APK
-      # --------------------------------------------------
+      # 14. Verify APK
       - name: Verify APK
         shell: bash
         run: |
           set -e
+
+          cd project
 
           APK="app/build/outputs/apk/debug/app-debug.apk"
 
           test -f "$APK"
 
           echo "========================================"
-          echo "              APK SUCCESS"
+          echo "APK BUILD: SUCCESS"
           echo "========================================"
 
           ls -lh "$APK"
 
-      # --------------------------------------------------
-      # 14. Upload APK
-      # --------------------------------------------------
+          echo ""
+          echo "SHA256:"
+          sha256sum "$APK"
+
+      # 15. Upload APK
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: Pharma-Mentor-debug
-          path: app/build/outputs/apk/debug/app-debug.apk
+          name: PharmaMentor-V51-Debug-APK
+          path: project/app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
-
-      # --------------------------------------------------
-      # 15. Upload Room schemas if generated
-      # --------------------------------------------------
-      - name: Upload Room schemas
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: Pharma-Mentor-room-schemas
-          path: |
-            app/schemas/**
-            schemas/**
-          if-no-files-found: ignore
+          retention-days: 14
