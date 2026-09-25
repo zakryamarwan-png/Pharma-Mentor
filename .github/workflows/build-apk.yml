@@ -72,20 +72,41 @@ jobs:
           echo "Android SDK 35: OK"
           echo "Build Tools 35.0.0: OK"
 
-      # 7. Locate source ZIP
-      - name: Locate source ZIP
+      # 7. Locate source project or ZIP
+      - name: Locate source project
         shell: bash
         run: |
           set -e
 
-          ZIP="PharmaMentor_V51_FULL_FIXED_READY.zip"
-
           echo "========================================"
-          echo "LOCATING SOURCE ZIP"
+          echo "LOCATING PHARMA MENTOR PROJECT"
           echo "========================================"
 
-          if [ ! -f "$ZIP" ]; then
-            echo "ERROR: $ZIP was not found."
+          # If the repository already contains the Gradle project,
+          # use it directly.
+          if [ -f "settings.gradle.kts" ] || [ -f "settings.gradle" ]; then
+            echo "Gradle project found directly in repository root."
+            echo "BUILD_SOURCE=ROOT" >> "$GITHUB_ENV"
+            exit 0
+          fi
+
+          # Otherwise search for a supported source ZIP.
+          ZIP=""
+
+          for candidate in \
+            "PharmaMentor_V51_DRUG_LIBRARY_588_FINAL_BUILD_FIXED.zip" \
+            "PharmaMentor_V51_DRUG_LIBRARY_588_BUILD_FIXED.zip" \
+            "PharmaMentor_V51_FULL_FIXED_READY.zip" \
+            "PharmaMentor_source_bundle.zip"
+          do
+            if [ -f "$candidate" ]; then
+              ZIP="$candidate"
+              break
+            fi
+          done
+
+          if [ -z "$ZIP" ]; then
+            echo "ERROR: No Gradle project or supported source ZIP found."
             echo ""
             echo "Repository root:"
             ls -lah
@@ -96,19 +117,23 @@ jobs:
           fi
 
           echo "SOURCE ZIP:"
+          echo "$ZIP"
+
           ls -lh "$ZIP"
 
           unzip -t "$ZIP" >/dev/null
 
           echo "ZIP integrity: OK"
 
-      # 8. Extract and detect project root
+          echo "BUILD_SOURCE=ZIP" >> "$GITHUB_ENV"
+          echo "SOURCE_ZIP=$ZIP" >> "$GITHUB_ENV"
+
+      # 8. Extract source ZIP when necessary
       - name: Extract source project
+        if: env.BUILD_SOURCE == 'ZIP'
         shell: bash
         run: |
           set -e
-
-          ZIP="PharmaMentor_V51_FULL_FIXED_READY.zip"
 
           echo "========================================"
           echo "EXTRACTING SOURCE PROJECT"
@@ -117,22 +142,24 @@ jobs:
           rm -rf project
           mkdir -p project
 
-          unzip -q "$ZIP" -d project
+          unzip -q "$SOURCE_ZIP" -d project
 
           echo "Extraction completed."
 
           echo ""
           echo "Searching for Gradle project root..."
 
-          SETTINGS_FILE=$(find project -maxdepth 6 \
+          SETTINGS_FILE=$(find project -maxdepth 8 \
             \( -name "settings.gradle.kts" -o -name "settings.gradle" \) \
             -print -quit)
 
           if [ -z "$SETTINGS_FILE" ]; then
             echo "ERROR: settings.gradle(.kts) not found."
+
             echo ""
             echo "Extracted files:"
-            find project -maxdepth 5 -type f | head -200
+            find project -maxdepth 6 -type f | head -250
+
             exit 1
           fi
 
@@ -142,11 +169,13 @@ jobs:
           echo "$ROOT_DIR"
 
           if [ "$ROOT_DIR" != "project" ]; then
+
             rm -rf project_root
             mkdir -p project_root
 
             shopt -s dotglob
-            mv "$ROOT_DIR"/* project_root/
+
+            cp -R "$ROOT_DIR"/. project_root/
 
             rm -rf project
             mv project_root project
@@ -156,6 +185,37 @@ jobs:
           echo "FINAL PROJECT ROOT:"
           ls -lah project
 
+      # 9. Prepare direct repository project
+      - name: Prepare direct project
+        if: env.BUILD_SOURCE == 'ROOT'
+        shell: bash
+        run: |
+          set -e
+
+          echo "========================================"
+          echo "USING PROJECT FROM REPOSITORY ROOT"
+          echo "========================================"
+
+          rm -rf project
+          mkdir -p project
+
+          shopt -s dotglob
+          cp -R . project/
+
+          rm -rf project/project
+
+          echo "Project copied successfully."
+
+      # 10. Verify Gradle project
+      - name: Verify Gradle project
+        shell: bash
+        run: |
+          set -e
+
+          echo "========================================"
+          echo "VERIFYING GRADLE PROJECT"
+          echo "========================================"
+
           test -f project/settings.gradle.kts || \
           test -f project/settings.gradle
 
@@ -164,10 +224,17 @@ jobs:
 
           test -d project/app
 
-          echo ""
           echo "Gradle project verification: PASSED"
 
-      # 9. Gradle wrapper check — SAFE
+          echo ""
+          echo "Project files:"
+          ls -lah project
+
+          echo ""
+          echo "App:"
+          ls -lah project/app
+
+      # 11. Gradle wrapper
       - name: Check Gradle wrapper
         shell: bash
         run: |
@@ -180,20 +247,24 @@ jobs:
           echo "========================================"
 
           if [ -f "./gradlew" ]; then
-            echo "gradlew found."
 
             chmod +x ./gradlew
 
+            echo "gradlew found."
             echo "gradlew executable: OK"
 
             ./gradlew --version || true
+
           else
+
             echo "gradlew not found."
-            echo "This is acceptable because Gradle 8.10 is provided by setup-gradle."
-            echo "Using system Gradle 8.10."
+            echo "Using Gradle 8.10 supplied by setup-gradle."
+
+            gradle --version
+
           fi
 
-      # 10. Verify Room structure — GENERIC
+      # 12. Verify Room
       - name: Verify Room database structure
         shell: bash
         run: |
@@ -220,7 +291,7 @@ jobs:
           grep -n "@Database" "$DB" || true
 
           echo ""
-          echo "Room entities registered:"
+          echo "Room entities:"
           grep -n "Entity::class" "$DB" || true
 
           echo ""
@@ -238,17 +309,52 @@ jobs:
           echo "Detected Room entity files: $ENTITY_COUNT"
 
           if [ "$ENTITY_COUNT" -eq 0 ]; then
-            echo "WARNING: No @Entity declarations detected."
-            echo "Gradle compilation will provide the final validation."
-          else
-            echo "Room entity declarations: FOUND"
+            echo "ERROR: No @Entity declarations detected."
+            exit 1
           fi
 
           echo ""
           echo "ROOM STRUCTURE CHECK: PASSED"
 
-      # 11. Verify Gradle configuration
-      - name: Verify Gradle project configuration
+      # 13. Verify comprehensive drug library
+      - name: Verify comprehensive drug library
+        shell: bash
+        run: |
+          set -e
+
+          cd project
+
+          echo "========================================"
+          echo "VERIFYING COMPREHENSIVE DRUG LIBRARY"
+          echo "========================================"
+
+          SEED="app/src/main/java/com/pharmamentor/app/data/ComprehensiveDrugSeed.kt"
+
+          if [ ! -f "$SEED" ]; then
+            echo "WARNING: ComprehensiveDrugSeed.kt not found."
+            echo "Continuing because the project may use another library source."
+            exit 0
+          fi
+
+          echo "Library file: FOUND"
+
+          COUNT=$(grep -oE 'd\("[^"]+"' "$SEED" | wc -l)
+
+          echo "Drug entries detected: $COUNT"
+
+          if [ "$COUNT" -lt 212 ]; then
+            echo "ERROR: Drug library contains fewer than 212 entries."
+            exit 1
+          fi
+
+          if [ "$COUNT" -lt 500 ]; then
+            echo "WARNING: Drug library contains fewer than 500 entries."
+          fi
+
+          echo "Comprehensive drug library check: PASSED"
+
+      # 14. Verify Gradle configuration
+      - name: Verify Gradle configuration
         shell: bash
         run: |
           set -e
@@ -269,11 +375,7 @@ jobs:
           echo "Root files:"
           ls -lah
 
-          echo ""
-          echo "App directory:"
-          ls -lah app
-
-      # 12. Clean
+      # 15. Clean
       - name: Gradle clean
         shell: bash
         run: |
@@ -285,12 +387,19 @@ jobs:
           echo "GRADLE CLEAN"
           echo "========================================"
 
-          gradle \
-            --no-daemon \
-            --stacktrace \
-            clean
+          if [ -f "./gradlew" ]; then
+            ./gradlew \
+              --no-daemon \
+              --stacktrace \
+              clean
+          else
+            gradle \
+              --no-daemon \
+              --stacktrace \
+              clean
+          fi
 
-      # 13. Build
+      # 16. Build Debug APK
       - name: Build Debug APK
         shell: bash
         run: |
@@ -302,12 +411,23 @@ jobs:
           echo "BUILDING PHARMA MENTOR APK"
           echo "========================================"
 
-          gradle \
-            --no-daemon \
-            --stacktrace \
-            :app:assembleDebug
+          if [ -f "./gradlew" ]; then
 
-      # 14. Verify APK
+            ./gradlew \
+              --no-daemon \
+              --stacktrace \
+              :app:assembleDebug
+
+          else
+
+            gradle \
+              --no-daemon \
+              --stacktrace \
+              :app:assembleDebug
+
+          fi
+
+      # 17. Verify APK
       - name: Verify APK
         shell: bash
         run: |
@@ -317,7 +437,15 @@ jobs:
 
           APK="app/build/outputs/apk/debug/app-debug.apk"
 
-          test -f "$APK"
+          if [ ! -f "$APK" ]; then
+            echo "ERROR: APK was not generated."
+
+            echo ""
+            echo "APK search:"
+            find app/build -type f 2>/dev/null | sort || true
+
+            exit 1
+          fi
 
           echo "========================================"
           echo "APK BUILD: SUCCESS"
@@ -329,7 +457,7 @@ jobs:
           echo "SHA256:"
           sha256sum "$APK"
 
-      # 15. Upload APK
+      # 18. Upload APK
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
